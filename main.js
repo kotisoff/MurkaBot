@@ -1,3 +1,9 @@
+console.log("[INFO ??:??:??]", "\x1b[90mImporting modules...\x1b[0m");
+
+const Logger = require("./utils/logger");
+const log = new Logger("Main");
+
+const loadtimer = Date.now();
 const discord = require("discord.js"),
   fs = require("node:fs"),
   path = require("node:path");
@@ -6,18 +12,14 @@ require("colors");
 
 const { configDeepScan, dirDeepScan } = require("./utils/scanTools");
 const deployCommands = require("./utils/deployCommands");
-const Logger = require("./utils/logger");
+log.info("All modules imported.".gray);
 
 const args = (() => {
   const args = process.argv.slice(2);
   return { debug: args.includes("debug") };
 })();
 
-const log = new Logger("Main");
-
 const configVersion = "0.0.1";
-
-const loadtimer = Date.now();
 
 // Loading configuration
 
@@ -27,16 +29,16 @@ const idealConfig = {
   bot: {
     token: "bot's token",
     prefix: "'",
-    devGuildId: "guild id",
+    devGuildId: "guild id"
   },
   settings: {
     commandsPath: "commands",
     allowShortCommands: true,
     allowRussianCommands: true,
     autoDeploy: true,
-    ignoredCommandDirs: [".lib", ".i", "libs"],
+    ignoredCommandDirs: [".lib", ".i", "libs"]
   },
-  latestVersion: configVersion,
+  latestVersion: configVersion
 };
 
 if (!fs.existsSync("./config.json")) {
@@ -54,6 +56,8 @@ if (config.latestVersion != configVersion) {
   fs.writeFileSync("./config.json", JSON.stringify(config));
 }
 
+log.info(`Main config imported. (${Date.now() - loadtimer}ms)`.gray);
+
 const { token, prefix } = config.bot;
 
 if (!fs.existsSync(config.settings.commandsPath))
@@ -66,16 +70,22 @@ if (!fs.existsSync("configs")) fs.mkdirSync("configs");
 const bot = new discord.Client({ intents: [3276799] });
 bot.login(token);
 
-bot.commands = new discord.Collection();
-bot.help = new discord.Collection();
+bot.interCmd = new discord.Collection();
+bot.prefCmd = new discord.Collection();
 bot.data = {};
 bot.config = config;
 
 const commands = [];
 
+log.info(`Importing commands... (${Date.now() - loadtimer}ms)`.gray);
+
 const commandsPath = path.join(__dirname, config.settings.commandsPath);
 const commandFiles = [];
-dirDeepScan(commandsPath, commandFiles, config);
+dirDeepScan(commandsPath, {
+  collected: commandFiles,
+  ignoredDirs: config.settings.ignoredCommandDirs,
+  fileExtension: ".js"
+});
 
 for (const file of commandFiles) {
   commands.push(require(file));
@@ -83,7 +93,7 @@ for (const file of commandFiles) {
 
 log.info(
   commands.length,
-  `commands loaded... (${Date.now() - loadtimer}ms)`.gray
+  `commands imported... (${Date.now() - loadtimer}ms)`.gray
 );
 
 // Init commands
@@ -91,20 +101,27 @@ log.info(
 let collected = 0;
 commands.forEach((command, index) => {
   const commandname = path.basename(commandFiles[index]);
-  if (!command.id)
-    return log.warn(
+  if (command.id) {
+    if (command.isPrefixCommand) {
+      const settings = config.settings;
+      bot.prefCmd.set(command.prefixCommandInfo.name, command);
+      if (settings.allowShortCommands)
+        bot.prefCmd.set(command.prefixCommandInfo.shortName, command);
+      if (settings.allowRussianCommands) {
+        bot.prefCmd.set(command.prefixCommandInfo.ruName, command);
+        if (settings.allowShortCommands)
+          bot.prefCmd.set(command.prefixCommandInfo.shortRuName, command);
+      }
+    }
+    if (command.isSlashCommand) {
+      bot.interCmd.set(command.slashCommandInfo.name, command);
+    }
+    collected++;
+  }
+  if (!command.id) {
+    log.warn(
       `The command (${commandname}) is missing required properties.`.yellow
     );
-  const settings = config.settings;
-  bot.commands.set(command.prefixCommandInfo.name, command);
-  bot.commands.set(command.slashCommandInfo.name, command);
-  if (settings.allowShortCommands)
-    bot.commands.set(command.prefixCommandInfo.shortName, command);
-  if (settings.allowRussianCommands)
-    bot.commands.set(command.prefixCommandInfo.ruName, command);
-  if (settings.allowRussianCommands && settings.allowShortCommands) {
-    bot.commands.set(command.prefixCommandInfo.shortRuName, command);
-    collected++;
   }
 });
 log.info(collected, `commands collected... (${Date.now() - loadtimer}ms)`.gray);
@@ -113,12 +130,11 @@ log.info(collected, `commands collected... (${Date.now() - loadtimer}ms)`.gray);
 
 bot.on(discord.Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const command = bot.commands.get(interaction.commandName);
-  if (!command.isSlashCommand) return;
+  const command = bot.interCmd.get(interaction.commandName);
   if (!command) {
     interaction.reply({
       content: `Команда ${interaction.commandName} не существует!\nОна была либо удалена, либо перенесена.\nСвяжитесь с @kotisoff для подробностей!`,
-      ephemeral: true,
+      ephemeral: true
     });
     log.error(`No command matching ${interaction.commandName} was found.`.gray);
     return;
@@ -130,7 +146,7 @@ bot.on(discord.Events.InteractionCreate, async (interaction) => {
     log.error(error);
     let errcontent = {
       content: "Бот съехал с катушек, звоните в дурку бля.",
-      ephemeral: true,
+      ephemeral: true
     };
     if (!interaction.replied) {
       await interaction.reply(errcontent);
@@ -149,11 +165,11 @@ log.info(
 bot.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
   if (!msg.content.startsWith(prefix)) return;
-  const commandBody = msg.content.split(" ");
-  const name = commandBody[0].toLowerCase();
-  const command = bot.prefCmd.get(command.slice(prefix.length));
-  if (command) {
-    command.prefixRun(msg, bot);
+  let commandBody = msg.content.split(" ");
+  let command = commandBody[0].toLowerCase();
+  let name = bot.prefCmd.get(command.slice(prefix.length));
+  if (name) {
+    name.prefixRun(msg, bot);
   }
 });
 
@@ -183,7 +199,7 @@ bot.once(discord.Events.ClientReady, (bot) => {
 
   bot.user.setStatus("idle");
   bot.user.setActivity("за " + bot.guilds.cache.size + " серверами ._.", {
-    type: discord.ActivityType.Watching,
+    type: discord.ActivityType.Watching
   });
 
   log.info(initialized, "commands initialized.".green);
